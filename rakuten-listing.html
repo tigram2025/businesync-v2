@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>メルカリ→楽天RMS 出品CSV変換</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+:root {
+  --bg:#0a0a0f; --s1:#111118; --s2:#18181f; --s3:#202028;
+  --bd:#28283a; --bd2:#35354a;
+  --g:#22d3a0; --red:#f05a5a; --blue:#5b8fff; --yel:#ffc046; --pur:#b87fff;
+  --tx:#e8e8f0; --t2:#9090b0; --t3:#55556a;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Noto Sans JP',sans-serif;background:var(--bg);color:var(--tx);font-size:14px;min-height:100vh}
+
+header{background:var(--s1);border-bottom:1px solid var(--bd);padding:14px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.logo{font-family:'JetBrains Mono',monospace;font-size:14px;color:var(--g);font-weight:600;white-space:nowrap}
+.logo em{color:var(--t3);font-style:normal}
+.tag{display:inline-flex;align-items:center;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500}
+.t-mercari{background:rgba(240,90,90,.12);color:var(--red)}
+.t-rakuten{background:rgba(255,68,102,.15);color:#ff4466}
+
+main{max-width:1100px;margin:0 auto;padding:16px}
+
+.panel{background:var(--s1);border:1px solid var(--bd);border-radius:10px;overflow:hidden;margin-bottom:14px}
+.ph{padding:11px 16px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pt{font-size:13px;font-weight:500}
+.pb{padding:16px}
+
+.btn{padding:7px 14px;border-radius:7px;border:none;cursor:pointer;font-family:'Noto Sans JP',sans-serif;font-size:12px;font-weight:500;transition:all .15s;white-space:nowrap}
+.btn-g{background:var(--g);color:#000}.btn-g:hover{background:#2fffc0}
+.btn-o{background:var(--s3);color:var(--t2);border:1px solid var(--bd)}.btn-o:hover{color:var(--tx)}
+.btn-r{background:rgba(240,90,90,.12);color:var(--red);border:1px solid rgba(240,90,90,.2)}.btn-r:hover{background:rgba(240,90,90,.22)}
+.btn-sm{padding:3px 9px;font-size:11px}
+
+.toolbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:12px}
+.sbox{flex:1;min-width:160px;background:var(--s1);border:1px solid var(--bd);border-radius:7px;padding:7px 11px;color:var(--tx);font-family:'Noto Sans JP',sans-serif;font-size:13px;outline:none;transition:border-color .2s}
+.sbox:focus{border-color:var(--g)}.sbox::placeholder{color:var(--t3)}
+
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead tr{background:var(--s2);border-bottom:1px solid var(--bd)}
+th{padding:8px 12px;text-align:left;font-size:10px;font-weight:500;color:var(--t3);text-transform:uppercase;letter-spacing:.8px;white-space:nowrap}
+tbody tr{border-bottom:1px solid rgba(40,40,58,.5);transition:background .1s}
+tbody tr:hover{background:rgba(255,255,255,.02)}
+tr.row-checked{background:rgba(255,90,90,.07)}
+tr.row-checked:hover{background:rgba(255,90,90,.11)}
+td{padding:8px 12px;color:var(--tx);white-space:nowrap}
+.num{font-family:'JetBrains Mono',monospace;font-size:12px}
+.pos{color:var(--g)}.neg{color:var(--red)}.warn{color:var(--yel)}
+
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);backdrop-filter:blur(4px);z-index:200;align-items:center;justify-content:center}
+.overlay.on{display:flex}
+.modal{background:var(--s1);border:1px solid var(--bd);border-radius:14px;width:480px;max-width:96vw;padding:22px;animation:mIn .2s ease;max-height:90vh;overflow-y:auto}
+@keyframes mIn{from{opacity:0;transform:translateY(-10px) scale(.97)}to{opacity:1;transform:none}}
+.modal h3{font-size:15px;font-weight:600;margin-bottom:16px}
+.fg{margin-bottom:12px}
+label{display:block;font-size:10px;color:var(--t3);margin-bottom:5px;text-transform:uppercase;letter-spacing:.8px}
+input[type=text],input[type=number],select,textarea{width:100%;background:var(--s2);border:1px solid var(--bd);border-radius:7px;padding:8px 11px;color:var(--tx);font-family:'Noto Sans JP',sans-serif;font-size:13px;outline:none;transition:border-color .2s}
+input:focus,select:focus,textarea:focus{border-color:var(--g)}
+select option{background:var(--s2)}
+textarea{resize:vertical;min-height:60px}
+.fr{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.ma{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+
+.pager{display:flex;gap:4px;justify-content:center;padding:12px;flex-wrap:wrap}
+.pgb{width:28px;height:28px;border-radius:6px;border:1px solid var(--bd);background:transparent;color:var(--t2);cursor:pointer;font-size:12px;transition:all .15s;display:flex;align-items:center;justify-content:center}
+.pgb:hover{background:var(--s2);color:var(--tx)}.pgb.on{background:var(--g);border-color:var(--g);color:#000;font-weight:700}
+
+.empty{text-align:center;padding:36px 20px;color:var(--t3)}
+.empty-icon{font-size:32px;margin-bottom:8px}
+
+#toast{position:fixed;bottom:20px;right:20px;background:var(--s1);border:1px solid var(--g);color:var(--g);padding:10px 16px;border-radius:8px;font-size:13px;z-index:999;opacity:0;transform:translateY(8px);transition:all .25s;pointer-events:none;max-width:300px}
+#toast.on{opacity:1;transform:none}
+
+@media(max-width:640px){ .fr{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">BUSINE<em>SYNC</em></div>
+  <span class="tag t-mercari">メルカリ</span>
+  <span style="color:var(--t3)">→</span>
+  <span class="tag t-rakuten">楽天市場</span>
+  <span style="font-size:13px;font-weight:500;margin-left:2px">出品CSV変換ツール</span>
+</header>
+
+<main>
+
+  <div class="panel" style="border-color:rgba(255,68,102,.25);background:linear-gradient(135deg,rgba(255,68,102,.05),rgba(34,211,160,.03))">
+    <div class="ph" style="border-color:rgba(255,68,102,.15)"><span class="pt">使い方</span></div>
+    <div class="pb">
+      <div style="font-size:12px;color:var(--t2);line-height:1.8">
+        メルカリの出品ページを見ながら商品情報をここに入力すると、楽天RMSの商品一括登録CSVを生成できます。<br>
+        生成したCSVは楽天RMSの商品管理画面から手動でアップロードしてください（WEB API連携ではなくCSV方式です）。<br>
+        自分のRMS商品一括登録CSVの見出し行を「テンプレート設定」に登録しておくと、その列にあわせて自動マッピングします。未設定の場合は汎用フォーマットで出力します。<br>
+        入力内容はこのブラウザ内（localStorage）に保存されます。
+      </div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <input class="sbox" placeholder="商品名で検索..." id="rk-search" oninput="renderRk()">
+    <div class="fg" style="margin:0;min-width:130px">
+      <input type="number" class="sbox" id="rk-margin" value="120" min="0" step="1" title="メルカリ価格に対する掛け率(%)" style="max-width:90px" onchange="localStorage.setItem('bs2_rakuten_margin', this.value)">
+    </div>
+    <button class="btn btn-g" onclick="openAddRk()">＋ 商品を追加</button>
+    <button class="btn btn-o" onclick="openRkTpl()">⚙ テンプレート設定</button>
+    <button class="btn btn-o" onclick="expRkCsv()">📤 楽天CSV書出</button>
+    <button class="btn btn-r" id="rk-bulk-del-btn" style="display:none" onclick="bulkDelRk()">🗑 選択削除 (<span id="rk-sel-count">0</span>件)</button>
+    <button class="btn btn-r" onclick="clearRk()">全削除</button>
+  </div>
+  <div class="panel">
+    <div class="tw">
+      <table>
+        <thead><tr>
+          <th style="width:36px;padding:6px 8px"><input type="checkbox" id="rk-chk-all" title="全選択/解除" onchange="rkToggleAll(this.checked)" style="cursor:pointer;width:15px;height:15px"></th>
+          <th>商品名</th>
+          <th>メルカリ価格</th>
+          <th>楽天価格</th>
+          <th>在庫</th>
+          <th>ステータス</th>
+          <th>操作</th>
+        </tr></thead>
+        <tbody id="rk-tbody"></tbody>
+      </table>
+    </div>
+    <div class="pager" id="rk-pager"></div>
+  </div>
+
+</main>
+
+<!-- 楽天出品アイテム -->
+<div class="overlay" id="m-rk">
+  <div class="modal" style="width:560px">
+    <h3 id="mrk-title">メルカリ商品を追加</h3>
+    <div class="fg"><label>商品名（メルカリ）</label><input type="text" id="mrk-name" placeholder="メルカリの商品タイトルをコピペ"></div>
+    <div class="fg"><label>メルカリ商品URL（任意）</label><input type="text" id="mrk-url" placeholder="https://jp.mercari.com/item/..."></div>
+    <div class="fr">
+      <div class="fg"><label>メルカリ価格 (円)</label><input type="number" id="mrk-mprice" placeholder="0" min="0" oninput="calcRkPrice()"></div>
+      <div class="fg"><label>掛け率 (%)</label><input type="number" id="mrk-margin" placeholder="120" min="0" oninput="calcRkPrice()"></div>
+    </div>
+    <div class="fg">
+      <label>楽天販売価格 (円)</label>
+      <div style="display:flex;gap:8px">
+        <input type="number" id="mrk-rprice" placeholder="0" min="0" style="flex:1" oninput="this.dataset.touched='1'">
+        <button type="button" class="btn btn-o btn-sm" onclick="calcRkPrice(true)">🧮 再計算</button>
+      </div>
+    </div>
+    <div class="fr">
+      <div class="fg"><label>在庫数</label><input type="number" id="mrk-stock" value="1" min="0"></div>
+      <div class="fg"><label>カテゴリ（任意）</label><input type="text" id="mrk-cat" placeholder="例: 時計"></div>
+    </div>
+    <div class="fg"><label>商品説明</label><textarea id="mrk-desc" placeholder="メルカリの商品説明文をコピペ（楽天用に文言調整可）"></textarea></div>
+    <div class="fg"><label>画像URL（1行に1つ）</label><textarea id="mrk-images" placeholder="https://...jpg&#10;https://...jpg"></textarea></div>
+    <div class="fr">
+      <div class="fg"><label>商品管理番号（任意・RMS用）</label><input type="text" id="mrk-itemno" placeholder="空欄なら自動採番"></div>
+      <div class="fg"><label>ステータス</label>
+        <select id="mrk-status">
+          <option value="draft">出品準備中</option>
+          <option value="ready">CSV出力済み</option>
+          <option value="listed">出品済み</option>
+        </select>
+      </div>
+    </div>
+    <div class="fg"><label>メモ</label><textarea id="mrk-memo" placeholder="任意メモ"></textarea></div>
+    <div class="ma">
+      <button class="btn btn-o" onclick="closeM('m-rk')">キャンセル</button>
+      <button class="btn btn-g" onclick="saveRk()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 楽天CSVテンプレート設定 -->
+<div class="overlay" id="m-rk-tpl">
+  <div class="modal" style="width:560px">
+    <h3>楽天RMS CSVテンプレート設定</h3>
+    <div style="font-size:12px;color:var(--t2);margin-bottom:12px;line-height:1.7">
+      RMSからダウンロードした「商品一括登録CSV」ひな形の見出し行（1行目）をExcel等からコピーして貼り付けてください。<br>
+      商品名・価格・在庫・説明・画像・管理番号にあたる列を、列名のキーワードから自動でマッピングします。未設定の場合は汎用フォーマットで出力します。
+    </div>
+    <div class="fg"><label>見出し行（カンマ区切り）</label><textarea id="mrktpl-header" placeholder="商品管理番号(商品URL),商品番号,商品名,PC用商品説明文,販売価格,在庫数,商品画像URL1,..." style="min-height:90px"></textarea></div>
+    <div class="ma" style="justify-content:space-between">
+      <button class="btn btn-r" onclick="clearRkTpl()">テンプレート削除</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-o" onclick="closeM('m-rk-tpl')">キャンセル</button>
+        <button class="btn btn-g" onclick="saveRkTpl()">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 確認モーダル -->
+<div class="overlay" id="m-confirm">
+  <div class="modal" style="max-width:360px;text-align:center">
+    <div style="font-size:28px;margin-bottom:12px" id="confirm-icon">⚠️</div>
+    <div style="font-size:15px;font-weight:600;margin-bottom:8px" id="confirm-title">確認</div>
+    <div style="font-size:13px;color:var(--t2);margin-bottom:20px;line-height:1.6" id="confirm-msg"></div>
+    <div style="display:flex;gap:10px;justify-content:center">
+      <button class="btn btn-o" style="min-width:90px" onclick="confirmResolve(false)">キャンセル</button>
+      <button class="btn btn-r" style="min-width:90px" id="confirm-ok-btn" onclick="confirmResolve(true)">削除する</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ══════════════════════════════════════
+//  LOCAL STORAGE
+// ══════════════════════════════════════
+const LS_RK_ITEMS = 'bs2_rakuten_listings';
+
+function lsGetRk() {
+  try { return JSON.parse(localStorage.getItem(LS_RK_ITEMS) || '[]'); }
+  catch(e) { console.warn('LS read error', e); return []; }
+}
+function saveRkItems() {
+  try { localStorage.setItem(LS_RK_ITEMS, JSON.stringify(rkItems)); }
+  catch(e) {
+    if (e.name === 'QuotaExceededError') toast('⚠ ストレージ容量が不足しています', 'var(--yel)');
+    else console.warn('LS write error', e);
+  }
+}
+
+let rkItems = lsGetRk();
+let rkPg = 1;
+const PS = 20;
+let editId = null;
+let rkChecked = new Set();
+let rkTpl = JSON.parse(localStorage.getItem('bs2_rakuten_tpl') || 'null');
+
+// ══════════════════════════════════════
+//  UI UTILS
+// ══════════════════════════════════════
+function toast(msg, c = 'var(--g)') {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.borderColor = c; t.style.color = c;
+  t.classList.add('on'); setTimeout(() => t.classList.remove('on'), 3000);
+}
+function closeM(id) { document.getElementById(id).classList.remove('on'); }
+document.querySelectorAll('.overlay').forEach(o =>
+  o.addEventListener('click', e => { if (e.target === o) o.classList.remove('on'); })
+);
+function escHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function dl(content, filename) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\uFEFF' + content], { type: 'text/csv' }));
+  a.download = filename; a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+let confirmResolve = () => {};
+function customConfirm(msg, { title = '確認', okLabel = '削除する', icon = '⚠️' } = {}) {
+  return new Promise(resolve => {
+    document.getElementById('confirm-icon').textContent  = icon;
+    document.getElementById('confirm-title').textContent = title;
+    document.getElementById('confirm-msg').textContent   = msg;
+    document.getElementById('confirm-ok-btn').textContent = okLabel;
+    document.getElementById('m-confirm').classList.add('on');
+    confirmResolve = (result) => {
+      document.getElementById('m-confirm').classList.remove('on');
+      resolve(result);
+    };
+  });
+}
+
+function renderPager(elId, pages, cur, onClick) {
+  const el = document.getElementById(elId);
+  el.innerHTML = '';
+  if (pages <= 1) return;
+  let prev = 0;
+  for (let p = 1; p <= pages; p++) {
+    if (p !== 1 && p !== pages && Math.abs(p - cur) > 2) continue;
+    if (prev && p - prev > 1) {
+      const dots = document.createElement('span');
+      dots.textContent = '…'; dots.style.color = 'var(--t3)'; dots.style.padding = '0 4px';
+      el.appendChild(dots);
+    }
+    const btn = document.createElement('button');
+    btn.className = 'pgb' + (p === cur ? ' on' : '');
+    btn.textContent = p;
+    btn.onclick = () => onClick(p);
+    el.appendChild(btn);
+    prev = p;
+  }
+}
+
+// ══════════════════════════════════════
+//  楽天出品変換（メルカリ → 楽天RMS CSV）
+// ══════════════════════════════════════
+const RK_STATUS_LABEL = { draft: '出品準備中', ready: 'CSV出力済み', listed: '出品済み' };
+const RK_STATUS_CLASS = { draft: 'warn', ready: 'pos', listed: 'pos' };
+
+function rkStatusLabel(s) { return RK_STATUS_LABEL[s] || RK_STATUS_LABEL.draft; }
+
+function renderRk() {
+  const q = (document.getElementById('rk-search')?.value || '').toLowerCase();
+  const data = rkItems.filter(it => !q || (it.name || '').toLowerCase().includes(q));
+
+  const pages = Math.max(1, Math.ceil(data.length / PS));
+  if (rkPg > pages) rkPg = pages;
+  const slice = data.slice((rkPg - 1) * PS, rkPg * PS);
+  const tbody = document.getElementById('rk-tbody');
+
+  if (!slice.length) {
+    tbody.innerHTML = `<tr><td colspan="7"><div class="empty"><div class="empty-icon">🛍️</div>楽天出品予定の商品がありません</div></td></tr>`;
+  } else {
+    tbody.innerHTML = slice.map(it => {
+      const isChecked = rkChecked.has(it.id);
+      return `<tr class="${isChecked ? 'row-checked' : ''}">
+        <td style="padding:6px 8px">
+          <input type="checkbox" ${isChecked ? 'checked' : ''} style="cursor:pointer;width:15px;height:15px"
+            onchange="rkRowToggle('${it.id}', this.checked)">
+        </td>
+        <td>${escHtml(it.name)}</td>
+        <td class="num neg">¥${(it.mercariPrice || 0).toLocaleString()}</td>
+        <td class="num pos">¥${(it.rakutenPrice || 0).toLocaleString()}</td>
+        <td class="num">${it.stock ?? 0}</td>
+        <td><span class="${RK_STATUS_CLASS[it.status] || 'warn'}">${rkStatusLabel(it.status)}</span></td>
+        <td><div style="display:flex;gap:4px">
+          <button class="btn btn-o btn-sm" onclick="editRk('${it.id}')">編集</button>
+          <button class="btn btn-r btn-sm" onclick="delRk('${it.id}')">削除</button>
+        </div></td>
+      </tr>`;
+    }).join('');
+  }
+
+  renderPager('rk-pager', pages, rkPg, p => { rkPg = p; renderRk(); });
+  updateRkBulkBtn();
+
+  const chkAll = document.getElementById('rk-chk-all');
+  if (chkAll) {
+    const ids = slice.map(it => it.id);
+    chkAll.checked = ids.length > 0 && ids.every(id => rkChecked.has(id));
+    chkAll.indeterminate = !chkAll.checked && ids.some(id => rkChecked.has(id));
+  }
+}
+
+function rkRowToggle(id, checked) {
+  if (checked) rkChecked.add(id); else rkChecked.delete(id);
+  renderRk();
+}
+
+function rkToggleAll(checked) {
+  const q = (document.getElementById('rk-search')?.value || '').toLowerCase();
+  const data = rkItems.filter(it => !q || (it.name || '').toLowerCase().includes(q));
+  const slice = data.slice((rkPg - 1) * PS, rkPg * PS);
+  slice.forEach(it => { if (checked) rkChecked.add(it.id); else rkChecked.delete(it.id); });
+  renderRk();
+}
+
+function updateRkBulkBtn() {
+  const btn = document.getElementById('rk-bulk-del-btn');
+  const countEl = document.getElementById('rk-sel-count');
+  if (btn) btn.style.display = rkChecked.size > 0 ? '' : 'none';
+  if (countEl) countEl.textContent = rkChecked.size;
+}
+
+function calcRkPrice(force) {
+  const mp = parseFloat(document.getElementById('mrk-mprice').value) || 0;
+  const margin = parseFloat(document.getElementById('mrk-margin').value) || 0;
+  const rpField = document.getElementById('mrk-rprice');
+  if (!force && rpField.value && rpField.dataset.touched === '1') return;
+  rpField.value = mp && margin ? Math.round(mp * margin / 100 / 10) * 10 : '';
+}
+
+function openAddRk() {
+  editId = null;
+  document.getElementById('mrk-title').textContent = 'メルカリ商品を追加';
+  ['mrk-name', 'mrk-url', 'mrk-cat', 'mrk-desc', 'mrk-images', 'mrk-itemno', 'mrk-memo'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('mrk-mprice').value = '';
+  document.getElementById('mrk-margin').value = localStorage.getItem('bs2_rakuten_margin') || document.getElementById('rk-margin').value || 120;
+  document.getElementById('mrk-rprice').value = '';
+  document.getElementById('mrk-rprice').dataset.touched = '0';
+  document.getElementById('mrk-stock').value = 1;
+  document.getElementById('mrk-status').value = 'draft';
+  document.getElementById('m-rk').classList.add('on');
+}
+
+function editRk(id) {
+  const it = rkItems.find(x => x.id === id);
+  if (!it) return;
+  editId = id;
+  document.getElementById('mrk-title').textContent = '商品を編集';
+  document.getElementById('mrk-name').value    = it.name || '';
+  document.getElementById('mrk-url').value     = it.mercariUrl || '';
+  document.getElementById('mrk-mprice').value  = it.mercariPrice || '';
+  document.getElementById('mrk-margin').value  = it.margin || 120;
+  document.getElementById('mrk-rprice').value  = it.rakutenPrice || '';
+  document.getElementById('mrk-rprice').dataset.touched = '1';
+  document.getElementById('mrk-stock').value   = it.stock ?? 1;
+  document.getElementById('mrk-cat').value     = it.category || '';
+  document.getElementById('mrk-desc').value    = it.description || '';
+  document.getElementById('mrk-images').value  = (it.images || []).join('\n');
+  document.getElementById('mrk-itemno').value  = it.itemNumber || '';
+  document.getElementById('mrk-status').value  = it.status || 'draft';
+  document.getElementById('mrk-memo').value    = it.memo || '';
+  document.getElementById('m-rk').classList.add('on');
+}
+
+function saveRk() {
+  const name = document.getElementById('mrk-name').value.trim();
+  if (!name) { toast('商品名を入力してください', 'var(--red)'); return; }
+  const images = document.getElementById('mrk-images').value.split('\n').map(s => s.trim()).filter(Boolean);
+  let itemNumber = document.getElementById('mrk-itemno').value.trim();
+  if (!itemNumber) {
+    itemNumber = editId ? (rkItems.find(x => x.id === editId)?.itemNumber || '') : '';
+    if (!itemNumber) itemNumber = 'RK' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase();
+  }
+  const obj = {
+    name,
+    mercariUrl:   document.getElementById('mrk-url').value.trim(),
+    mercariPrice: Math.max(0, parseFloat(document.getElementById('mrk-mprice').value) || 0),
+    margin:       Math.max(0, parseFloat(document.getElementById('mrk-margin').value) || 0),
+    rakutenPrice: Math.max(0, parseFloat(document.getElementById('mrk-rprice').value) || 0),
+    stock:        Math.max(0, parseInt(document.getElementById('mrk-stock').value) || 0),
+    category:     document.getElementById('mrk-cat').value.trim(),
+    description:  document.getElementById('mrk-desc').value.trim(),
+    images,
+    itemNumber,
+    status:       document.getElementById('mrk-status').value,
+    memo:         document.getElementById('mrk-memo').value.trim()
+  };
+
+  if (editId !== null) {
+    const it = rkItems.find(x => x.id === editId);
+    if (it) Object.assign(it, obj);
+  } else {
+    rkItems.push({ id: crypto.randomUUID ? crypto.randomUUID() : Date.now() + Math.random(), ...obj });
+  }
+
+  saveRkItems();
+  closeM('m-rk');
+  renderRk();
+  toast(editId ? '✅ 更新しました' : '✅ 商品を保存しました');
+}
+
+async function delRk(id) {
+  if (!await customConfirm('この商品を削除しますか？', { okLabel: '削除する', icon: '🗑️' })) return;
+  rkItems = rkItems.filter(it => it.id !== id);
+  rkChecked.delete(id);
+  saveRkItems();
+  renderRk();
+  toast('削除しました', 'var(--red)');
+}
+
+async function bulkDelRk() {
+  if (rkChecked.size === 0) return;
+  if (!await customConfirm(`選択した ${rkChecked.size}件の商品を削除します。\nこの操作は元に戻せません。`,
+      { title: `${rkChecked.size}件を削除`, okLabel: '削除する' })) return;
+  rkItems = rkItems.filter(it => !rkChecked.has(it.id));
+  rkChecked.clear();
+  saveRkItems();
+  renderRk();
+  toast('削除しました', 'var(--red)');
+}
+
+async function clearRk() {
+  if (!await customConfirm('全商品を削除します。\nこの操作は元に戻せません。', { title: '全件削除', okLabel: '全削除する' })) return;
+  rkItems = [];
+  rkChecked.clear();
+  saveRkItems();
+  renderRk();
+  toast('全削除しました', 'var(--red)');
+}
+
+// ── カスタムCSVテンプレート ──
+function openRkTpl() {
+  document.getElementById('mrktpl-header').value = rkTpl ? rkTpl.join(',') : '';
+  document.getElementById('m-rk-tpl').classList.add('on');
+}
+
+function saveRkTpl() {
+  const raw = document.getElementById('mrktpl-header').value.trim();
+  if (!raw) { toast('見出し行を入力してください', 'var(--red)'); return; }
+  rkTpl = raw.split(',').map(s => s.trim()).filter(Boolean);
+  localStorage.setItem('bs2_rakuten_tpl', JSON.stringify(rkTpl));
+  closeM('m-rk-tpl');
+  toast('✅ テンプレートを保存しました');
+}
+
+function clearRkTpl() {
+  rkTpl = null;
+  localStorage.removeItem('bs2_rakuten_tpl');
+  document.getElementById('mrktpl-header').value = '';
+  toast('テンプレートを削除しました（汎用フォーマットで出力します）', 'var(--yel)');
+}
+
+function rkColumnKind(header) {
+  const h = header.toLowerCase();
+  if (/画像|image/.test(h)) return 'image';
+  if (/管理番号|商品番号|sku|item.?no/.test(h)) return 'itemNumber';
+  if (/(在庫|stock)/.test(h)) return 'stock';
+  if (/(仕入|原価|cost)/.test(h)) return null; // 仕入原価はメルカリ→楽天変換の対象外
+  if (/(価格|price)/.test(h)) return 'price';
+  if (/(説明|description|comment)/.test(h)) return 'description';
+  if (/(カテゴリ|category)/.test(h)) return 'category';
+  if (/(商品名|title|item.?name)/.test(h)) return 'name';
+  if (/url/.test(h) && /メルカリ|mercari/.test(h)) return 'mercariUrl';
+  return null;
+}
+
+function buildRkRow(it, headers) {
+  if (!headers) {
+    return {
+      商品管理番号: it.itemNumber,
+      商品番号: it.itemNumber,
+      商品名: it.name,
+      販売価格: it.rakutenPrice,
+      在庫数: it.stock,
+      'PC用商品説明文': it.description,
+      'スマートフォン用商品説明文': it.description,
+      カテゴリ: it.category,
+      商品画像URL1: it.images[0] || '',
+      商品画像URL2: it.images[1] || '',
+      商品画像URL3: it.images[2] || '',
+      商品画像URL4: it.images[3] || '',
+      商品画像URL5: it.images[4] || '',
+      メルカリ元URL: it.mercariUrl,
+      メモ: it.memo
+    };
+  }
+  const row = {};
+  let imgIdx = 0;
+  headers.forEach(h => {
+    const kind = rkColumnKind(h);
+    switch (kind) {
+      case 'itemNumber':  row[h] = it.itemNumber; break;
+      case 'name':        row[h] = it.name; break;
+      case 'price':       row[h] = it.rakutenPrice; break;
+      case 'stock':       row[h] = it.stock; break;
+      case 'description': row[h] = it.description; break;
+      case 'category':    row[h] = it.category; break;
+      case 'mercariUrl':  row[h] = it.mercariUrl; break;
+      case 'image':       row[h] = it.images[imgIdx++] || ''; break;
+      default:             row[h] = '';
+    }
+  });
+  return row;
+}
+
+function expRkCsv() {
+  const targets = rkChecked.size > 0 ? rkItems.filter(it => rkChecked.has(it.id)) : rkItems;
+  if (!targets.length) { toast('出力対象の商品がありません', 'var(--red)'); return; }
+  const rows = targets.map(it => buildRkRow(it, rkTpl));
+  const csv = Papa.unparse(rows);
+  dl(csv, 'rakuten_rms_item_upload.csv');
+
+  targets.forEach(it => { if (it.status === 'draft') it.status = 'ready'; });
+  saveRkItems();
+  renderRk();
+  toast(`✅ ${targets.length}件を楽天CSVとして出力しました`);
+}
+
+// ══════════════════════════════════════
+//  INIT
+// ══════════════════════════════════════
+const rkMarginInput = document.getElementById('rk-margin');
+if (rkMarginInput) rkMarginInput.value = localStorage.getItem('bs2_rakuten_margin') || 120;
+renderRk();
+</script>
+</body>
+</html>
