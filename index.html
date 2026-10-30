@@ -459,6 +459,16 @@ tr.row-checked:hover { background: rgba(255,90,90,.11); }
         <span style="color:var(--g);font-family:'JetBrains Mono',monospace">Highest bid + Shipping costs</span> → 売上総額　／　
         <span style="color:var(--pur);font-family:'JetBrains Mono',monospace">Payment</span> → 受取額（手数料引後）
       </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;font-size:12px">
+        <span style="color:var(--t2)">取込通貨：</span>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--tx)">
+          <input type="radio" name="cata-cur" value="JPY" onchange="setCataCur(this.value)"> 🇯🇵 日本円（¥）
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--tx)">
+          <input type="radio" name="cata-cur" value="EUR" onchange="setCataCur(this.value)"> 🇪🇺 ユーロ（€）
+        </label>
+        <span id="cata-cur-note" style="font-size:11px;color:var(--t3)"></span>
+      </div>
       <div class="ai-drop" id="cata-drop" style="border-color:rgba(184,127,255,.4);background:rgba(184,127,255,.03);padding:20px">
         <input type="file" id="cata-file" accept=".csv,.xlsx,.xls" multiple>
         <div style="font-size:24px;margin-bottom:6px">🎨</div>
@@ -716,14 +726,20 @@ tr.row-checked:hover { background: rgba(255,90,90,.11); }
     <div class="fg"><label>注文番号</label><input type="text" id="ms-orderno" placeholder="例: 45753608" style="font-family:'JetBrains Mono',monospace"></div>
     <div class="fr">
       <div class="fg"><label>数量</label><input type="number" id="ms-qty" value="1" min="1"></div>
-      <div class="fg"><label>売上単価 (円/€)</label><input type="number" id="ms-price" placeholder="0" min="0"></div>
+      <div class="fg"><label>売上単価</label><input type="number" id="ms-price" placeholder="0" min="0"></div>
+      <div class="fg"><label>通貨（Catawikiのみ）</label>
+        <select id="ms-cur">
+          <option value="JPY">¥ 日本円</option>
+          <option value="EUR">€ ユーロ</option>
+        </select>
+      </div>
     </div>
     <div class="fr">
       <div class="fg"><label>仕入金額 (円)</label><input type="number" id="ms-cost" placeholder="0" min="0"></div>
       <div class="fg"><label>送料 (円)</label><input type="number" id="ms-shipping" placeholder="0" min="0"></div>
     </div>
     <div class="fr">
-      <div class="fg"><label>受取額 (手数料後・円/€)</label><input type="number" id="ms-payment" placeholder="空欄でも可" min="0"></div>
+      <div class="fg"><label>受取額 (手数料後)</label><input type="number" id="ms-payment" placeholder="空欄でも可" min="0"></div>
     </div>
     <div class="fg"><label>メモ</label><textarea id="ms-memo" placeholder="備考など" style="min-height:44px"></textarea></div>
     <div class="ma">
@@ -1243,6 +1259,27 @@ function fallback(text, filename) {
 // ══════════════════════════════════════
 let cataItems = [];
 
+// ── Catawiki 取込通貨（2026年11月〜は日本円で入力） ──
+// 'JPY' = 金額を日本円として取込 / 'EUR' = 従来どおりユーロ建て
+let cataCur = (() => {
+  try { return localStorage.getItem('bs2_cata_cur') || 'JPY'; } catch(e) { return 'JPY'; }
+})();
+function setCataCur(v) {
+  cataCur = v === 'EUR' ? 'EUR' : 'JPY';
+  try { localStorage.setItem('bs2_cata_cur', cataCur); } catch(e) {}
+  syncCataCurUI();
+}
+function syncCataCurUI() {
+  document.querySelectorAll('input[name="cata-cur"]').forEach(el => { el.checked = el.value === cataCur; });
+  const note = document.getElementById('cata-cur-note');
+  if (note) note.textContent = cataCur === 'JPY'
+    ? '「受取額(円)」列があればそれを使い、なければ Payment を円として読み込みます'
+    : 'Payment をユーロとして読み込み、表示時に円換算します';
+}
+document.addEventListener('DOMContentLoaded', syncCataCurUI);
+// 円建て取込時、受取額に使う列（「受取額(円)」「JPY」などがあれば優先）
+const CATA_JPY_PAY_RE = /受取額?.*(円|¥|jpy)|^(jpy|円)$|受取金額|^受取額$/i;
+
 // ドラッグ&ドロップ設定
 document.addEventListener('DOMContentLoaded', () => {
   const cDrop = document.getElementById('cata-drop');
@@ -1297,6 +1334,32 @@ async function handleCataFiles(files) {
   showCataPrev();
 }
 
+// ── BusineSYNC形式の1行 → Catawiki円建てアイテム ──
+// 列: 日付,商品名,モール,数量,単価,売上総額,受取額,仕入金額,送料,粗利,メモ
+function busiRowToCata(row, fmtDate) {
+  const n = v => parseFloat((v ?? '').toString().replace(/[¥￥,\s円]/g, '')) || 0;
+  const name = (row['商品名'] || '').toString().trim().slice(0, 80);
+  if (!name || /還付|合計/.test(name)) return null;
+  const total    = Math.round(n(row['売上総額']) || n(row['単価']));
+  const payment  = Math.round(n(row['受取額'])) || null;
+  if (total <= 0 && !payment) return null;
+  const cost     = n(row['仕入金額']);
+  const shipping = n(row['送料']);
+  const memo     = (row['メモ'] || '').toString().trim();
+  const om       = memo.match(/^(\d{6,})/);
+  return {
+    id:       crypto.randomUUID ? crypto.randomUUID() : Date.now() + Math.random(),
+    name, date: fmtDate(row['日付']), mall: 'Catawiki', currency: 'JPY', qty: 1,
+    bid: 0, shipCost: 0,
+    price: total || payment, total: total || payment, payment,
+    orderNo:  om ? om[1] : '',
+    cost:     (cost + shipping) > 0 ? (cost + shipping) : undefined,
+    costBase: cost > 0 ? cost : undefined,
+    shipping: shipping > 0 ? shipping : undefined,
+    memo, selected: true
+  };
+}
+
 // ── Catawiki XLSX パーサー ──
 async function parseCataXLSX(file) {
   const buf  = await file.arrayBuffer();
@@ -1306,10 +1369,11 @@ async function parseCataXLSX(file) {
   if (rows.length < 2) return [];
 
   // ヘッダーが1行目か2行目か自動判定（catawiki_paymentsタイトル行対応）
+  // 先頭5行からヘッダー行を探す（タイトル行が1〜2行あるExcelにも対応）
   let headerRowIdx = 0;
-  if (rows.length > 2) {
-    const r1 = rows[1].map(h => (h||'').toString().trim()).join(',');
-    if (/object|payment|commission/i.test(r1)) headerRowIdx = 1;
+  for (let i = 0; i < Math.min(5, rows.length - 1); i++) {
+    const cells = rows[i].map(h => (h||'').toString().trim());
+    if (cells.filter(Boolean).length >= 3 && cells.some(h => /^(object\s*name|payment|商品名|受取額)$/i.test(h))) { headerRowIdx = i; break; }
   }
 
   const headers  = rows[headerRowIdx].map(h => (h||'').toString().trim());
@@ -1317,6 +1381,10 @@ async function parseCataXLSX(file) {
   const fi = name => headers.findIndex(h => name.test(h));
 
   const isCataPayments = fi(/^payment$/i) >= 0 && fi(/仕入れ?金額|仕入れ?額/i) >= 0;
+  // BusineSYNC形式（日付/商品名/売上総額/受取額/仕入金額/送料）は常に円建て
+  const isBusiFmt = fi(/^商品名$/) >= 0 && fi(/^受取額$/) >= 0;
+  const jpyPayIdx = headers.findIndex(h => CATA_JPY_PAY_RE.test(h));
+  const useJpy    = isBusiFmt || cataCur === 'JPY';
 
   const bidIdx     = fi(/^highest\s*bid$/i) >= 0 ? fi(/^highest\s*bid$/i)       : fi(/highest.*bid/i);
   const shipIdx    = fi(/^shipping\s*costs?$/i) >= 0 ? fi(/^shipping\s*costs?$/i) : fi(/shipping.*cost/i);
@@ -1344,15 +1412,24 @@ async function parseCataXLSX(file) {
   const results = [];
   dataRows.forEach(row => {
     if (!row || row.every(v => !v)) return;
+    if (isBusiFmt) {
+      const it = busiRowToCata(Object.fromEntries(headers.map((h, i) => [h, row[i]])), fmtDate);
+      if (it) results.push(it);
+      return;
+    }
     const name    = nameIdx  >= 0 ? (row[nameIdx]||'').toString().trim().slice(0,80) : 'Catawiki Lot';
     const date    = fmtDate(dateIdx >= 0 ? row[dateIdx] : null);
     const orderNo = orderIdx >= 0 ? String(row[orderIdx]||'').trim() : '';
     if (statusIdx >= 0 && /cancel/i.test((row[statusIdx]||'').toString())) return;
+    if (/還付|合計/.test(name)) return;
 
     let bid, shipCost, total, payment, cost, shipping, memoItems;
 
     if (isCataPayments) {
-      payment  = payIdx >= 0 ? toNum(row[payIdx]) : null;
+      const eurPay = payIdx >= 0 ? toNum(row[payIdx]) : 0;
+      payment  = (useJpy && jpyPayIdx >= 0) ? Math.round(toNum(row[jpyPayIdx]))
+               : useJpy ? Math.round(eurPay)
+               : (payIdx >= 0 ? eurPay : null);
       if (!payment || payment <= 0) return;
       cost     = costJpyIdx >= 0 ? toNum(row[costJpyIdx]) : 0;
       shipping = shipJpyIdx >= 0 ? toNum(row[shipJpyIdx]) : 0;
@@ -1360,6 +1437,7 @@ async function parseCataXLSX(file) {
       bid      = total; shipCost = 0;
       memoItems = [
         orderNo ? '注文#'+orderNo : '',
+        useJpy && jpyPayIdx >= 0 && eurPay ? '€'+eurPay.toFixed(2) : '',
         shipping > 0 ? '送料¥'+shipping.toLocaleString() : ''
       ].filter(Boolean);
     } else {
@@ -1382,6 +1460,7 @@ async function parseCataXLSX(file) {
       id:       crypto.randomUUID ? crypto.randomUUID() : Date.now()+Math.random(),
       name:     name || 'Catawiki Lot',
       date, mall: 'Catawiki', qty: 1,
+      currency: useJpy ? 'JPY' : undefined,
       bid, shipCost,
       price:    total, total, payment, orderNo,
       cost:     (cost+shipping) > 0 ? (cost+shipping) : undefined,
@@ -1441,8 +1520,21 @@ function parseCataCSV(text, filename) {
   const commF     = fields.find(f => /commission.*incl|commission.*vat/i.test(f));
   // catawiki_payments形式かどうか（PaymentとJPY仕入れ列がある）
   const isCataPayments = !!payF && !!costJpyF;
+  // BusineSYNC形式（日付/商品名/売上総額/受取額…）は常に円建て
+  const isBusiFmt = fields.includes('商品名') && fields.includes('受取額');
+  const jpyPayF   = fields.find(f => CATA_JPY_PAY_RE.test(f.trim()));
+  const useJpy    = isBusiFmt || cataCur === 'JPY';
 
   const toNum = v => parseFloat((v || '').toString().replace(/[€$£¥\s]/g, '').replace(/,/g, '.')) || 0;
+
+  if (isBusiFmt) {
+    const fmtD = v => {
+      const m = (v || '').toString().match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+      return m ? `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}` : new Date().toISOString().slice(0,10);
+    };
+    parsed.data.forEach(row => { const it = busiRowToCata(row, fmtD); if (it) results.push(it); });
+    return results;
+  }
 
   parsed.data.forEach(row => {
     const name    = (row[nameF] || '').toString().trim().slice(0, 80);
@@ -1457,7 +1549,10 @@ function parseCataCSV(text, filename) {
 
     if (isCataPayments) {
       // catawiki_payments形式: Payment=手数料引き後の受取額=売上総額
-      payment  = payF ? (toNum(row[payF]) || null) : null;
+      const eurPay = payF ? toNum(row[payF]) : 0;
+      payment  = (useJpy && jpyPayF) ? Math.round(toNum(row[jpyPayF]))
+               : useJpy ? Math.round(eurPay)
+               : (eurPay || null);
       if (!payment || payment <= 0) return;
       // 還付金計算行・合計行をスキップ
       const rowName = (row[nameF] || row['Object name'] || '').toString().trim();
@@ -1468,6 +1563,7 @@ function parseCataCSV(text, filename) {
       bid = total; shipCost = 0;
       memoItems = [
         orderNo ? '注文#' + orderNo : '',
+        useJpy && jpyPayF && eurPay ? '€' + eurPay.toFixed(2) : '',
         shipping > 0 ? '送料¥' + shipping.toLocaleString() : ''
       ].filter(Boolean);
     } else {
@@ -1494,6 +1590,7 @@ function parseCataCSV(text, filename) {
       name:     name || 'Catawiki Lot',
       date:     dm ? `${dm[1]}-${dm[2].padStart(2,'0')}-${dm[3].padStart(2,'0')}` : new Date().toISOString().slice(0,10),
       mall:     'Catawiki',
+      currency: useJpy ? 'JPY' : undefined,
       qty:      1,
       bid:      bid || 0,
       shipCost: shipCost || 0,
@@ -1574,7 +1671,8 @@ function renderCataPrevList() {
   document.getElementById('cata-prev-list').innerHTML = cataItems.map((it, i) => {
     const fee = (it.payment != null && it.total > 0)
       ? Math.round((1 - it.payment / it.total) * 100) : null;
-    const hasBidBreakdown = it.bid > 0;
+    const ck = it.currency === 'JPY' ? 'JPY' : 'Catawiki';
+    const hasBidBreakdown = it.bid > 0 && ck === 'Catawiki';
     return `<div class="pi ${it.selected ? 'sel' : ''}">
       <input type="checkbox" class="pi-chk" ${it.selected ? 'checked' : ''}
         onchange="cataItems[${i}].selected=this.checked;this.closest('.pi').classList.toggle('sel',this.checked);updCataCnt()">
@@ -1592,9 +1690,9 @@ function renderCataPrevList() {
       </div>
       <div style="text-align:right;margin-right:8px">
         <div style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:var(--g)">
-          ${fmtCurrency(it.total, 'Catawiki')}
+          ${fmtCurrency(it.total, ck)}
         </div>
-        ${it.payment != null ? `<div style="font-size:11px;color:var(--pur)">受取 ${fmtCurrency(it.payment, 'Catawiki')}${fee!=null?` (-${fee}%)`:''}</div>` : ''}
+        ${it.payment != null ? `<div style="font-size:11px;color:var(--pur)">受取 ${fmtCurrency(it.payment, ck)}${fee!=null?` (-${fee}%)`:''}</div>` : ''}
         ${it.cost > 0 ? `<div style="font-size:11px;color:var(--red)">仕入 ¥${it.cost.toLocaleString()}${it.shipping>0?' (送料¥'+it.shipping.toLocaleString()+')':''}</div>` : ''}
       </div>
     </div>`;
@@ -1615,8 +1713,10 @@ async function importCataSel() {
   // 既存データの注文番号セットを作成（重複防止）
   // ただし€20以下はVAT還付のため重複OK
   const existingOrders = new Set(sales.map(s => s.orderNo).filter(Boolean));
-  const dupes = toAdd.filter(it => it.orderNo && existingOrders.has(it.orderNo) && it.total > 20);
-  const fresh  = toAdd.filter(it => !it.orderNo || !existingOrders.has(it.orderNo) || it.total <= 20);
+  // 少額（€20以下）の重複OKはユーロ建てのみ
+  const smallOk = it => it.currency !== 'JPY' && it.total <= 20;
+  const dupes = toAdd.filter(it => it.orderNo && existingOrders.has(it.orderNo) && !smallOk(it));
+  const fresh  = toAdd.filter(it => !it.orderNo || !existingOrders.has(it.orderNo) || smallOk(it));
 
   if (dupes.length && !fresh.length) {
     toast(`⚠️ ${dupes.length}件はすでに取込済みです（注文番号重複）`, 'var(--red)');
@@ -1635,6 +1735,7 @@ async function importCataSel() {
       date:           it.date,
       product:        it.name,
       mall:           'Catawiki',
+      ...(it.currency === 'JPY' ? { currency: 'JPY' } : {}),
       qty:            1,
       price:          it.total,
       total:          it.total,
@@ -2141,6 +2242,8 @@ function importJapSel() {
       date:     it.date,
       product:  it.name,
       mall:     it.mall,
+      // 国内CSV（BusineSYNC形式）は円建て。Catawiki行も円として保存
+      ...(it.mall === 'Catawiki' ? { currency: 'JPY' } : {}),
       qty:      it.qty || 1,
       price:    it.price || it.total,
       total:    it.total,
@@ -2480,7 +2583,8 @@ function renderSal() {
       const ml     = r.mall || 'その他';
       const pay    = r.payment;
       const cost   = r.cost || 0;
-      const isCata = ml === 'Catawiki';
+      const isCata = isEurSale(r);
+      const ck     = curKey(r);
       const hRate  = r.historicalRate || null;
       const jpyRate = hRate || eurJpy || EUR_JPY_FALLBACK;
 
@@ -2514,10 +2618,10 @@ function renderSal() {
         </td>
         <td><span class="tag ${malCls(ml)}">${ml}</span></td>
         <td style="font-size:11px;color:var(--t2);font-family:'JetBrains Mono',monospace">${r.orderNo ? escHtml(String(r.orderNo)) : '<span style="color:var(--t3)">—</span>'}</td>
-        <td class="num pos" style="line-height:1.6">${fmtCurrency(t,ml)}${jpyNote}</td>
+        <td class="num pos" style="line-height:1.6">${fmtCurrency(t,ck)}${jpyNote}</td>
         <td class="num" style="color:var(--pur);line-height:1.6">
           ${pay!=null
-            ? `${fmtCurrency(pay,ml)}${fee!=null?`<span style="font-size:10px;color:var(--t3);margin-left:3px">(-${fee}%)</span>`:''}${payJpyNote}`
+            ? `${fmtCurrency(pay,ck)}${fee!=null?`<span style="font-size:10px;color:var(--t3);margin-left:3px">(-${fee}%)</span>`:''}${payJpyNote}`
             : '<span style="color:var(--t3)">—</span>'}
         </td>
         <td class="num neg cost-cell"
@@ -2610,6 +2714,7 @@ function openAddSal() {
   document.getElementById('ms-shipping').value = '';
   document.getElementById('ms-payment').value  = '';
   document.getElementById('ms-memo').value     = '';
+  document.getElementById('ms-cur').value      = 'JPY';
   document.getElementById('m-sal').classList.add('on');
 }
 
@@ -2628,6 +2733,7 @@ function editSal(id) {
   document.getElementById('ms-payment').value  = r.payment != null ? r.payment : '';
   document.getElementById('ms-memo').value    = r.memo  || '';
   document.getElementById('ms-mall').value    = r.mall;
+  document.getElementById('ms-cur').value     = isEurSale(r) ? 'EUR' : 'JPY';
   document.getElementById('m-sal').classList.add('on');
 }
 
@@ -2642,9 +2748,13 @@ function saveSal() {
   const payment    = payVal !== '' ? Math.max(0, parseFloat(payVal) || 0) : null;
   const totalCost  = costVal + shippingVal; // 粗利計算用（仕入＋送料）
 
+  const mallVal = document.getElementById('ms-mall').value;
+  const curVal  = document.getElementById('ms-cur').value;
   const obj = {
     date:     document.getElementById('ms-date').value,
-    mall:     document.getElementById('ms-mall').value,
+    mall:     mallVal,
+    // Catawikiで円を選んだ場合のみ currency:'JPY'（ユーロ建ては従来どおりフィールドなし）
+    currency: (mallVal === 'Catawiki' && curVal === 'JPY') ? 'JPY' : undefined,
     product, qty, price,
     total:    qty * price,
     cost:     totalCost > 0 ? totalCost : undefined,
@@ -2658,7 +2768,7 @@ function saveSal() {
   // undefined を除去（editId存在時はprofitフィールドも明示的に削除する）
   if (editId !== null) {
     const r = sales.find(x => x.id === editId);
-    if (r) delete r.profit;
+    if (r) { delete r.profit; delete r.currency; }
   }
   // undefined を除去
   Object.keys(obj).forEach(k => obj[k] === undefined && delete obj[k]);
@@ -3320,7 +3430,7 @@ function eurToJpy(eur) {
 // 売上レコードを円換算（Catawikiはヒストリカルレートまたは現在レート）
 function salToJpy(r) {
   const v = r.total || 0;
-  if (r.mall === 'Catawiki') {
+  if (isEurSale(r)) {
     if (r.historicalRate) return Math.round(v * r.historicalRate);
     return eurToJpy(v);
   }
@@ -3329,7 +3439,7 @@ function salToJpy(r) {
 function payToJpy(r) {
   const v = r.payment;
   if (v == null) return null;
-  if (r.mall === 'Catawiki') {
+  if (isEurSale(r)) {
     if (r.historicalRate) return Math.round(v * r.historicalRate);
     return eurToJpy(v);
   }
@@ -3497,8 +3607,11 @@ async function renderDash() {
   const mk  = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
   // ── 円建て売上（非Catawiki）
-  const jpySales    = sales.filter(r => r.mall !== 'Catawiki');
-  const cataSales   = sales.filter(r => r.mall === 'Catawiki');
+  // ユーロ建て（Catawiki旧データ）と円建て（Catawiki円建て取込分を含む）に分ける
+  const jpySales    = sales.filter(r => !isEurSale(r));
+  const cataSales   = sales.filter(r => isEurSale(r));
+  const cataJpySales = sales.filter(r => r.mall === 'Catawiki' && !isEurSale(r));
+  const cataJpyAmt  = cataJpySales.reduce((s, r) => s + (r.payment ?? r.total ?? 0), 0);
 
   const totJpyS     = jpySales.reduce((s, r)  => s + (r.total    || ((r.price||0)*(r.qty||1))), 0);
   // Catawiki: payment（受取額）をユーロ建てで合算
@@ -3520,7 +3633,7 @@ async function renderDash() {
   const mS = [...jpySales, ...cataSales]
     .filter(r => r.date?.startsWith(mk))
     .reduce((s, r) => {
-      if (r.mall === 'Catawiki') return s + eurToJpy(r.payment ?? r.total ?? 0);
+      if (isEurSale(r)) return s + eurToJpy(r.payment ?? r.total ?? 0);
       return s + (r.total || ((r.price||0)*(r.qty||1)));
     }, 0);
   const mC = purchases.filter(r => r.date?.startsWith(mk)).reduce((s, r) => {
@@ -3539,8 +3652,8 @@ async function renderDash() {
     </div>
     <div class="kpi">
       <div class="kl">🎨 Catawiki売上</div>
-      <div class="kv" style="color:var(--pur)">€${totCataEur.toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-      <div class="ks">${cataSales.length}件 ≈ ¥${totCataJpy.toLocaleString()}</div>
+      <div class="kv" style="color:var(--pur)">¥${(totCataJpy + cataJpyAmt).toLocaleString()}</div>
+      <div class="ks">${cataSales.length + cataJpySales.length}件${cataSales.length ? ` · €建て ${cataSales.length}件 €${totCataEur.toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2})}` : ''}${cataJpySales.length ? ` · 円建て ${cataJpySales.length}件` : ''}</div>
     </div>
     <div class="kpi">
       <div class="kl">総仕入れ（円換算）</div>
@@ -3564,7 +3677,7 @@ async function renderDash() {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const k = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
     const s = sales.filter(r => r.date?.startsWith(k)).reduce((a, r) => {
-      if (r.mall === 'Catawiki') return a + eurToJpy(r.payment ?? r.total ?? 0);
+      if (isEurSale(r)) return a + eurToJpy(r.payment ?? r.total ?? 0);
       return a + (r.total || ((r.price||0)*(r.qty||1)));
     }, 0);
     const c = purchases.filter(r => r.date?.startsWith(k)).reduce((a, r) => {
@@ -3622,7 +3735,7 @@ async function renderDash() {
   const salByName = {};
   sales.forEach(r => {
     const key = r.product || '';
-    const eur = r.mall === 'Catawiki';
+    const eur = isEurSale(r);
     const amt = eur ? (r.payment ?? r.total ?? 0) : (r.total || ((r.price||0)*(r.qty||1)));
     const jpy = eur ? eurToJpy(amt) : amt;
     if (!salByName[key]) salByName[key] = { jpy: 0, eur: 0, mall: r.mall, isEur: eur };
@@ -3711,7 +3824,7 @@ async function renderProfit() {
   const filteredSales = sales.filter(r => inPeriod(r.date));
   const filteredPurch = purchases.filter(r => inPeriod(r.date));
 
-  const isCata = r => r.mall === 'Catawiki';
+  const isCata = r => isEurSale(r);
 
   // 売上側の円換算
   const salToJpy = r => {
@@ -3726,6 +3839,9 @@ async function renderProfit() {
   // Catawiki円換算合計も各レコードの取引日レートで積算
   const totCataJpy = cataSales.reduce((s,r) => s + salToJpy(r), 0);
   const totCataEur = cataSales.reduce((s,r) => s+(r.payment??r.total??0), 0);
+  // 円建てで取り込んだCatawiki売上
+  const cataJpyRows = filteredSales.filter(r => r.mall === 'Catawiki' && !isEurSale(r));
+  const totCataJpyOnly = cataJpyRows.reduce((s,r) => s + salToJpy(r), 0);
 
   // 仕入れコスト：仕入れテーブル + 売上レコードの cost フィールド
   const purCostJpy = filteredPurch.reduce((s,r) => {
@@ -3748,7 +3864,7 @@ async function renderProfit() {
 
   document.getElementById('profit-kpis').innerHTML = `
     <div class="kpi"><div class="kl">売上合計（円換算）</div><div class="kv pos">¥${totSJpy.toLocaleString()}</div><div class="ks">${rateNote} · ${filteredSales.length}件</div></div>
-    ${totCataEur>0?`<div class="kpi"><div class="kl">🎨 Catawiki売上</div><div class="kv" style="color:var(--pur)">€${totCataEur.toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2})}</div><div class="ks">¥${totCataJpy.toLocaleString()}${hasHistorical?' (取引日レート)':''}</div></div>`:''}
+    ${(totCataEur>0 || cataJpyRows.length)?`<div class="kpi"><div class="kl">🎨 Catawiki売上</div><div class="kv" style="color:var(--pur)">¥${(totCataJpy + totCataJpyOnly).toLocaleString()}</div><div class="ks">${totCataEur>0?`€${totCataEur.toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2})}（€建て${cataSales.length}件${hasHistorical?'・取引日レート':''}）`:''}${totCataEur>0&&cataJpyRows.length?' + ':''}${cataJpyRows.length?`円建て${cataJpyRows.length}件`:''}</div></div>`:''}
     <div class="kpi"><div class="kl">仕入・原価合計</div><div class="kv neg">¥${totCostJpy.toLocaleString()}</div><div class="ks">仕入DB ¥${purCostJpy.toLocaleString()} + 売上原価 ¥${salCostJpy.toLocaleString()}</div></div>
     <div class="kpi"><div class="kl">粗利（円換算）</div><div class="kv ${profit>=0?'pos':'neg'}">¥${profit.toLocaleString()}</div></div>
     <div class="kpi"><div class="kl">粗利率</div><div class="kv ${mg>=0?'pos':'neg'}">${mg}%</div></div>`;
@@ -3826,7 +3942,7 @@ async function renderProfit() {
 
   document.getElementById('profit-tbody').innerHTML = rows.length
     ? rows.map(r => {
-        const isC = r.mall==='Catawiki';
+        const isC = r.sEur > 0;
         const salStr = isC
           ? `€${r.sEur.toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2})}<br><span style="font-size:10px;color:var(--t3)">≈¥${r.sJpy.toLocaleString()}</span>`
           : `¥${r.sJpy.toLocaleString()}`;
@@ -3851,6 +3967,16 @@ async function renderProfit() {
 // ══════════════════════════════════════
 //  CURRENCY HELPER
 // ══════════════════════════════════════
+// 売上レコードがユーロ建てかどうか
+// Catawikiは従来ユーロ建て。currency:'JPY' が付いたレコード（2026年11月〜の円建て取込分）は円として扱う
+function isEurSale(r) {
+  return !!r && r.mall === 'Catawiki' && r.currency !== 'JPY';
+}
+// fmtCurrency に渡す通貨キー（ユーロ建てなら 'Catawiki'、それ以外は円）
+function curKey(r) {
+  return isEurSale(r) ? 'Catawiki' : 'JPY';
+}
+
 // モールによって通貨記号・フォーマットを切り替え
 function fmtCurrency(amount, mall) {
   if (mall === 'Catawiki') {
